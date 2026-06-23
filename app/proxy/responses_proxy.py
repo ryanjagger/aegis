@@ -1,0 +1,311 @@
+from __future__ import annotations
+
+import json
+import time
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.canaries.injector import inject_canaries
+from app.canaries.registry import list_canaries_for_request
+from app.db import repository
+from app.models.base import AdapterUnavailableError, BaseResponsesAdapter
+from app.models.mock_responses import MockResponsesAdapter
+from app.models.ollama_model import OllamaAdapter
+from app.models.openai_responses import OpenAIResponsesAdapter
+from app.proxy.event_bus import EventBus
+from app.proxy.policy import apply_policy
+from app.proxy.request_normalizer import normalize_request
+from app.scanners.canary_scanner import CanaryScanner
+from app.scanners.responses_item_scanner import ResponsesItemScanner
+from app.schemas.api import NormalizedAISRequest
+from app.schemas.events import DetectorHit
+
+
+def get_adapter(name: str) -> BaseResponsesAdapter:
+    normalized = name.strip().lower()
+    if normalized in {"mock", "mock-ais", "mock-aisio"}:
+        return MockResponsesAdapter()
+    if normalized in {"openai", "openai_responses"}:
+        return OpenAIResponsesAdapter()
+    if normalized == "ollama":
+        return OllamaAdapter()
+    raise AdapterUnavailableError(f"Unknown model adapter: {name}")
+
+
+def run_responses_pipeline(
+    db: Session,
+    *,
+    body: dict[str, Any],
+    headers: dict[str, str],
+    route: str,
+    user_input: str | None = None,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    request_id = repository.short_id("req")
+    response_id = repository.short_id("resp")
+
+    preliminary_session = str(
+        (body.get("metadata") or {}).get("session_id") or headers.get("x-ais-session-id") or ""
+    )
+    turn_id = repository.next_turn_id(db, preliminary_session) if preliminary_session else 1
+
+    normalized = normalize_request(
+        body=body,
+        headers=headers,
+        route=route,
+        request_id=request_id,
+        response_id=response_id,
+        turn_id=turn_id,
+    )
+    if not preliminary_session:
+        normalized.turn_id = repository.next_turn_id(db, normalized.session_id)
+
+    bus = EventBus(db, request_id=request_id, session_id=normalized.session_id)
+    bus.emit(
+        "request.received",
+        {"route": route, "model": normalized.model, "scenario": normalized.scenario},
+        response_id=response_id,
+    )
+
+    if normalized.defenses.canary_injection:
+        input_items, injected_context, _canaries = inject_canaries(
+            db,
+            input_items=normalized.input_items,
+            request_id=request_id,
+            session_id=normalized.session_id,
+            response_id=response_id,
+        )
+        normalized.input_items = input_items
+        normalized.injected_context = injected_context
+        db.flush()
+    else:
+        normalized.injected_context = None
+
+    try:
+        adapter = get_adapter(normalized.model_adapter)
+        model_response = adapter.create_response(normalized)
+    except AdapterUnavailableError as exc:
+        model_response = MockResponsesAdapter().create_response(
+            normalized.model_copy(update={"scenario": "benign"})
+        )
+        model_response.output = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": f"[ADAPTER UNAVAILABLE: {exc}]"}],
+            }
+        ]
+
+    bus.emit(
+        "model.response.created",
+        {"output_item_count": len(model_response.output), "adapter": normalized.model_adapter},
+        response_id=response_id,
+    )
+
+    for index, item in enumerate(model_response.output):
+        repository.add_response_item(
+            db,
+            response_id=response_id,
+            request_id=request_id,
+            session_id=normalized.session_id,
+            item_index=index,
+            item=item,
+        )
+
+    hits: list[DetectorHit] = []
+    db.flush()
+    canaries = list_canaries_for_request(db, request_id)
+    if normalized.defenses.output_scanning:
+        scan_serialized = normalized.defenses.tool_scanning
+        scanner = ResponsesItemScanner(CanaryScanner(canaries))
+        hits = scanner.scan_output(
+            model_response.output,
+            scan_messages=True,
+            scan_tool_items=normalized.defenses.tool_scanning,
+            scan_serialized_output=scan_serialized,
+        )
+        for hit in hits:
+            repository.add_detector_hit(
+                db,
+                request_id=request_id,
+                response_id=response_id,
+                session_id=normalized.session_id,
+                hit=hit,
+            )
+            if hit.matched_canary_id:
+                repository.mark_canary_leaked(
+                    db,
+                    canary_id=hit.matched_canary_id,
+                    response_id=response_id,
+                    surface=hit.surface,
+                )
+            bus.emit(
+                "detector.hit",
+                {
+                    "detector": hit.detector,
+                    "surface": hit.surface,
+                    "severity": hit.severity,
+                    "matched_canary_id": hit.matched_canary_id,
+                },
+                response_id=response_id,
+            )
+
+    decision = apply_policy(model_response.output, hits)
+    _record_function_calls(
+        db,
+        request=normalized,
+        output=model_response.output,
+        hits=hits,
+        blocked=decision.action == "BLOCK",
+    )
+    repository.set_canary_response_id(db, request_id=request_id, response_id=response_id)
+
+    final_response = _build_response_object(
+        normalized=normalized,
+        output=decision.output,
+        status=model_response.status,
+        policy_action=decision.action,
+        detector_hit_count=len(hits),
+    )
+    raw_response = _build_response_object(
+        normalized=normalized,
+        output=model_response.output,
+        status=model_response.status,
+        policy_action="RAW",
+        detector_hit_count=0,
+    )
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    repository.add_response_record(
+        db,
+        response_id=response_id,
+        provider_response_id=model_response.provider_response_id,
+        request_id=request_id,
+        session_id=normalized.session_id,
+        turn_id=normalized.turn_id,
+        route=route,
+        model=normalized.model,
+        scenario=normalized.scenario,
+        raw_request=body,
+        normalized_input=normalized.input_items,
+        injected_context=normalized.injected_context,
+        raw_response=raw_response,
+        final_response=final_response,
+        output_text=decision.output_text,
+        policy_action=decision.action,
+        status=model_response.status,
+        latency_ms=latency_ms,
+    )
+    repository.add_request_record(
+        db,
+        request_id=request_id,
+        session_id=normalized.session_id,
+        turn_id=normalized.turn_id,
+        route=route,
+        scenario=normalized.scenario,
+        user_input=user_input or _extract_user_input(normalized),
+        injected_context=normalized.injected_context,
+        raw_output=json.dumps(model_response.output, sort_keys=True),
+        final_output=decision.output_text,
+        policy_action=decision.action,
+        status=model_response.status,
+        latency_ms=latency_ms,
+    )
+    bus.emit(
+        "policy.applied",
+        {"policy_action": decision.action, "detector_hit_count": len(hits)},
+        response_id=response_id,
+    )
+    bus.emit("response.returned", {"status": model_response.status}, response_id=response_id)
+    db.commit()
+    return final_response
+
+
+def _build_response_object(
+    *,
+    normalized: NormalizedAISRequest,
+    output: list[dict[str, Any]],
+    status: str,
+    policy_action: str,
+    detector_hit_count: int,
+) -> dict[str, Any]:
+    return {
+        "id": normalized.response_id,
+        "object": "response",
+        "created_at": int(time.time()),
+        "model": normalized.model,
+        "output": output,
+        "status": status,
+        "metadata": {
+            "ais_request_id": normalized.request_id,
+            "ais_session_id": normalized.session_id,
+            "ais_policy_action": policy_action,
+            "ais_detector_hit_count": str(detector_hit_count),
+        },
+    }
+
+
+def _extract_user_input(normalized: NormalizedAISRequest) -> str | None:
+    for item in normalized.input_items:
+        if item.get("role") != "user":
+            continue
+        content = item.get("content")
+        if isinstance(content, str) and not content.startswith("Internal diagnostic appendix"):
+            return content
+    return None
+
+
+def _record_function_calls(
+    db: Session,
+    *,
+    request: NormalizedAISRequest,
+    output: list[dict[str, Any]],
+    hits: list[DetectorHit],
+    blocked: bool,
+) -> None:
+    blocked_surfaces = {
+        hit.surface
+        for hit in hits
+        if hit.policy_recommendation == "BLOCK" and "function_call" in hit.surface
+    }
+    for item in output:
+        if item.get("type") != "function_call":
+            continue
+        arguments = item.get("arguments")
+        parsed_arguments: Any = arguments
+        if isinstance(arguments, str):
+            try:
+                parsed_arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                parsed_arguments = arguments
+
+        call_blocked = blocked and bool(blocked_surfaces)
+        repository.add_tool_call(
+            db,
+            request_id=request.request_id,
+            response_id=request.response_id or "",
+            session_id=request.session_id,
+            call_id=str(item.get("call_id") or repository.short_id("call")),
+            tool_name=str(item.get("name") or "unknown"),
+            arguments=parsed_arguments,
+            allowed=not call_blocked,
+            executed=False,
+            result=None,
+            block_reason=(
+                "registered_canary_detected" if call_blocked else "tool_execution_deferred"
+            ),
+        )
+        repository.add_event(
+            db,
+            request_id=request.request_id,
+            response_id=request.response_id,
+            session_id=request.session_id,
+            event_type="tool_call.blocked" if call_blocked else "tool_call.allowed",
+            payload={
+                "tool_name": str(item.get("name") or "unknown"),
+                "call_id": str(item.get("call_id") or ""),
+                "executed": False,
+                "blocked_surfaces": sorted(blocked_surfaces),
+            },
+        )

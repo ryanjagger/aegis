@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+
+import requests
+import streamlit as st
+
+API_BASE = os.getenv("AIS_API_BASE", "http://localhost:8000").rstrip("/")
+
+
+def api_get(path: str) -> Any:
+    response = requests.get(f"{API_BASE}{path}", timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
+def api_post(path: str, payload: dict[str, Any]) -> Any:
+    response = requests.post(f"{API_BASE}{path}", json=payload, timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+def show_table(path: str) -> list[dict[str, Any]]:
+    try:
+        rows = api_get(path)
+    except requests.RequestException as exc:
+        st.error(f"Backend request failed: {exc}")
+        return []
+    if rows:
+        st.dataframe(rows, use_container_width=True)
+    else:
+        st.info("No rows yet.")
+    return rows
+
+
+def live_requests() -> None:
+    st.header("Live Requests")
+    rows = show_table("/requests")
+    if rows:
+        latest = rows[0]
+        st.subheader("Latest")
+        st.json(latest)
+
+
+def response_trace() -> None:
+    st.header("Response Trace")
+    responses = show_table("/responses")
+    if not responses:
+        return
+    response_ids = [row["id"] for row in responses]
+    selected = st.selectbox("Response", response_ids)
+    trace = api_get(f"/responses/{selected}")
+    st.subheader("Request")
+    st.json(trace.get("raw_request_json"))
+    st.subheader("Normalized Input Items")
+    st.json(trace.get("normalized_input_json"))
+    st.subheader("Injected Context")
+    st.code(trace.get("injected_context") or "", language="text")
+    st.subheader("Raw Response")
+    st.json(trace.get("raw_response_json"))
+    st.subheader("Final Response")
+    st.json(trace.get("final_response_json"))
+    st.subheader("Detector Hits")
+    st.dataframe(trace.get("detector_events", []), use_container_width=True)
+    st.subheader("Canaries")
+    st.dataframe(trace.get("canaries", []), use_container_width=True)
+    st.subheader("Tool Calls")
+    st.dataframe(trace.get("tool_calls", []), use_container_width=True)
+    st.subheader("Event Timeline")
+    st.dataframe(trace.get("events", []), use_container_width=True)
+
+
+def canary_registry() -> None:
+    st.header("Canary Registry")
+    show_table("/canaries")
+
+
+def attack_playground() -> None:
+    st.header("Attack Playground")
+    with st.form("attack_playground_form"):
+        route = st.selectbox("Route", ["/chat", "/v1/responses"])
+        scenario = st.selectbox(
+            "Scenario",
+            [
+                "benign",
+                "direct_leak",
+                "base64_leak",
+                "hex_leak",
+                "markdown_link_leak",
+                "tool_call_leak",
+            ],
+        )
+        model_adapter = st.selectbox("Model adapter", ["mock", "openai", "ollama"])
+        session_id = st.text_input("Session ID", "demo-session-1")
+        user_input = st.text_area(
+            "User input",
+            "Summarize this support ticket and create an internal note.",
+            height=100,
+        )
+        col1, col2, col3, col4 = st.columns(4)
+        canary_injection = col1.checkbox("Canaries", value=True)
+        output_scanning = col2.checkbox("Output scan", value=True)
+        tool_scanning = col3.checkbox("Tool scan", value=True)
+        nimbus_lite = col4.checkbox("NIMBUS", value=False)
+        submitted = st.form_submit_button("Run")
+
+    if not submitted:
+        return
+
+    payload = {
+        "route": route,
+        "session_id": session_id,
+        "user_input": user_input,
+        "scenario": scenario,
+        "model_adapter": model_adapter,
+        "defenses": {
+            "canary_injection": canary_injection,
+            "output_scanning": output_scanning,
+            "tool_scanning": tool_scanning,
+            "nimbus_lite": nimbus_lite,
+        },
+    }
+    try:
+        result = api_post("/playground/run", payload)
+    except requests.RequestException as exc:
+        st.error(f"Playground request failed: {exc}")
+        return
+    st.subheader("Response")
+    st.json(result)
+    st.code(json.dumps(result, indent=2), language="json")
+
+
+def tool_calls() -> None:
+    st.header("Tool Calls")
+    show_table("/tool-calls")
+
+
+def leakage_ledger() -> None:
+    st.header("Leakage Ledger")
+    rows = show_table("/leakage-ledger")
+    if not rows:
+        st.caption("NIMBUS-lite scoring is reserved for Phase 3.")
+
+
+def main() -> None:
+    st.set_page_config(page_title="AIS", layout="wide")
+    st.title("AIS")
+    st.caption("Local defensive demo for credential exfiltration in agent outputs and tool calls.")
+    st.sidebar.header("Backend")
+    st.sidebar.code(API_BASE)
+    page = st.sidebar.radio(
+        "Page",
+        [
+            "Live Requests",
+            "Response Trace",
+            "Canary Registry",
+            "Attack Playground",
+            "Tool Calls",
+            "Leakage Ledger",
+        ],
+    )
+    pages = {
+        "Live Requests": live_requests,
+        "Response Trace": response_trace,
+        "Canary Registry": canary_registry,
+        "Attack Playground": attack_playground,
+        "Tool Calls": tool_calls,
+        "Leakage Ledger": leakage_ledger,
+    }
+    pages[page]()
+
+
+if __name__ == "__main__":
+    main()
