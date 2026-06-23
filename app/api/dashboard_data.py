@@ -32,6 +32,9 @@ def get_request(request_id: str, db: DbSession) -> dict:
     row["tool_calls"] = repository.list_rows_for_request(
         db, models.ToolCallRecord, request_id=request_id
     )
+    row["leakage_ledger"] = repository.list_rows_for_request(
+        db, models.LeakageLedgerRecord, request_id=request_id
+    )
     return row
 
 
@@ -59,6 +62,9 @@ def get_response(response_id: str, db: DbSession) -> dict:
     )
     row["tool_calls"] = repository.list_rows_for_response(
         db, models.ToolCallRecord, response_id=response_id
+    )
+    row["leakage_ledger"] = repository.list_rows_for_response(
+        db, models.LeakageLedgerRecord, response_id=response_id
     )
     return row
 

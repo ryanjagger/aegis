@@ -23,6 +23,7 @@ Dashboard / Playground
           canary generation and injection
           deterministic mock model adapter
           response item and function-call scanning
+          NIMBUS-lite cumulative leakage scoring
           policy engine
           SQLite event store
 ```
@@ -78,7 +79,7 @@ curl -s http://localhost:8000/chat \
       "canary_injection": true,
       "output_scanning": true,
       "tool_scanning": true,
-      "nimbus_lite": false
+      "nimbus_lite": true
     }
   }'
 ```
@@ -93,6 +94,7 @@ curl -s http://localhost:8000/chat \
 - `tool_call_leak`: model emits a `send_email` function call whose JSON body contains a canary.
 - `http_get_url_leak`: model emits an `http_get` function call with a Base64 canary in a URL query value.
 - `benign_tool_call`: model emits a safe `send_email` call that is scanned and executed locally.
+- `multi_turn_drip`: model emits small canary fragments across repeated turns; NIMBUS-lite accumulates risk until policy escalates.
 
 ## Phase 2 Tool Interception
 
@@ -114,11 +116,28 @@ The fake tools are:
 
 They do not send email, perform outbound network calls, or write files.
 
+## Phase 3 NIMBUS-lite
+
+NIMBUS-lite is a transparent demo heuristic, not a certified information-flow
+bound. When enabled, AIS scores each turn from detector hits and suspicious
+features such as partial canary fragments, credential-shaped values,
+high-entropy tokens, user requests for secrets, and encoded-looking output.
+
+Scores accumulate per `session_id` in `leakage_ledger` with a default budget of
+`10.0`:
+
+- `< 60%`: `PASS`
+- `60-79%`: `WARN`
+- `80-99%`: `SANITIZE`
+- `>= 100%`: `BLOCK`
+
+Detector policy and NIMBUS-lite policy are combined by taking the stricter
+action. The `multi_turn_drip` scenario demonstrates why this matters: no single
+turn contains a full canary, but repeated fragments eventually cross the
+cumulative budget.
+
 ## Tests
 
 ```bash
 pytest
 ```
-
-NIMBUS-lite is reserved for a later phase. The current implementation includes
-schema/endpoints and placeholders for that area.

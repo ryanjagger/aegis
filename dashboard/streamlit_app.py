@@ -68,6 +68,8 @@ def response_trace() -> None:
     st.dataframe(trace.get("canaries", []), use_container_width=True)
     st.subheader("Tool Calls")
     st.dataframe(trace.get("tool_calls", []), use_container_width=True)
+    st.subheader("Leakage Ledger")
+    st.dataframe(trace.get("leakage_ledger", []), use_container_width=True)
     st.subheader("Event Timeline")
     st.dataframe(trace.get("events", []), use_container_width=True)
 
@@ -92,6 +94,7 @@ def attack_playground() -> None:
                 "tool_call_leak",
                 "http_get_url_leak",
                 "benign_tool_call",
+                "multi_turn_drip",
             ],
         )
         model_adapter = st.selectbox("Model adapter", ["mock", "openai", "ollama"])
@@ -168,8 +171,10 @@ def tool_calls() -> None:
 def leakage_ledger() -> None:
     st.header("Leakage Ledger")
     rows = show_table("/leakage-ledger")
-    if not rows:
-        st.caption("NIMBUS-lite scoring is reserved for Phase 3.")
+    if rows:
+        st.line_chart(rows, x="created_at", y="score_total")
+    else:
+        st.caption("Enable NIMBUS in the Attack Playground to populate this ledger.")
 
 
 def main() -> None:

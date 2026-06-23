@@ -13,6 +13,8 @@ from app.models.base import AdapterUnavailableError, BaseResponsesAdapter
 from app.models.mock_responses import MockResponsesAdapter
 from app.models.ollama_model import OllamaAdapter
 from app.models.openai_responses import OpenAIResponsesAdapter
+from app.nimbus.ledger import NimbusLedgerUpdate, record_score_update
+from app.nimbus.scoring import score_request
 from app.proxy.event_bus import EventBus
 from app.proxy.policy import apply_policy
 from app.proxy.request_normalizer import normalize_request
@@ -141,7 +143,20 @@ def run_responses_pipeline(
     )
     all_hits = [*output_hits, *[hit for result in tool_results for hit in result.hits]]
 
-    decision = apply_policy(model_response.output, all_hits)
+    nimbus_update = _handle_nimbus_lite(
+        db,
+        bus=bus,
+        request=normalized,
+        output=model_response.output,
+        hits=all_hits,
+        canaries=canaries,
+    )
+
+    decision = apply_policy(
+        model_response.output,
+        all_hits,
+        nimbus_action=nimbus_update.policy_action if nimbus_update else None,
+    )
     repository.set_canary_response_id(db, request_id=request_id, response_id=response_id)
 
     final_response = _build_response_object(
@@ -151,6 +166,7 @@ def run_responses_pipeline(
         policy_action=decision.action,
         detector_hit_count=len(all_hits),
         tool_results=tool_results,
+        nimbus_update=nimbus_update,
     )
     raw_response = _build_response_object(
         normalized=normalized,
@@ -159,6 +175,7 @@ def run_responses_pipeline(
         policy_action="RAW",
         detector_hit_count=0,
         tool_results=tool_results,
+        nimbus_update=nimbus_update,
     )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -215,11 +232,30 @@ def _build_response_object(
     policy_action: str,
     detector_hit_count: int,
     tool_results: list[ToolProxyResult] | None = None,
+    nimbus_update: NimbusLedgerUpdate | None = None,
 ) -> dict[str, Any]:
     tool_results = tool_results or []
     tool_call_count = len(tool_results)
     tool_blocked_count = sum(1 for result in tool_results if not result.allowed)
     tool_executed_count = sum(1 for result in tool_results if result.executed)
+    metadata = {
+        "ais_request_id": normalized.request_id,
+        "ais_session_id": normalized.session_id,
+        "ais_policy_action": policy_action,
+        "ais_detector_hit_count": str(detector_hit_count),
+        "ais_tool_call_count": str(tool_call_count),
+        "ais_tool_blocked_count": str(tool_blocked_count),
+        "ais_tool_executed_count": str(tool_executed_count),
+    }
+    if nimbus_update:
+        metadata.update(
+            {
+                "ais_nimbus_score_delta": f"{nimbus_update.score_delta:.2f}",
+                "ais_nimbus_score_total": f"{nimbus_update.score_total:.2f}",
+                "ais_nimbus_budget": f"{nimbus_update.budget:.2f}",
+                "ais_nimbus_zone": nimbus_update.zone,
+            }
+        )
     return {
         "id": normalized.response_id,
         "object": "response",
@@ -227,15 +263,7 @@ def _build_response_object(
         "model": normalized.model,
         "output": output,
         "status": status,
-        "metadata": {
-            "ais_request_id": normalized.request_id,
-            "ais_session_id": normalized.session_id,
-            "ais_policy_action": policy_action,
-            "ais_detector_hit_count": str(detector_hit_count),
-            "ais_tool_call_count": str(tool_call_count),
-            "ais_tool_blocked_count": str(tool_blocked_count),
-            "ais_tool_executed_count": str(tool_executed_count),
-        },
+        "metadata": metadata,
     }
 
 
@@ -281,6 +309,43 @@ def _persist_output_hits(
             },
             response_id=request.response_id,
         )
+
+
+def _handle_nimbus_lite(
+    db: Session,
+    *,
+    bus: EventBus,
+    request: NormalizedAISRequest,
+    output: list[dict[str, Any]],
+    hits: list[DetectorHit],
+    canaries: list[Any],
+) -> NimbusLedgerUpdate | None:
+    if not request.defenses.nimbus_lite:
+        return None
+
+    score = score_request(request=request, output=output, hits=hits, canaries=canaries)
+    update = record_score_update(
+        db,
+        session_id=request.session_id,
+        request_id=request.request_id,
+        response_id=request.response_id or "",
+        turn_id=request.turn_id,
+        score_delta=score.score_delta,
+        reasons=score.reasons,
+    )
+    bus.emit(
+        "nimbus.scored",
+        {
+            "score_delta": update.score_delta,
+            "score_total": update.score_total,
+            "budget": update.budget,
+            "zone": update.zone,
+            "policy_action": update.policy_action,
+            "reason": update.reason,
+        },
+        response_id=request.response_id,
+    )
+    return update
 
 
 def _handle_function_calls(

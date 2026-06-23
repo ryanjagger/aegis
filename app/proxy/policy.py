@@ -52,16 +52,36 @@ def _rank_for_hit(hit: DetectorHit) -> PolicyRank:
     return PolicyRank.ALLOW
 
 
-def apply_policy(output: list[dict[str, Any]], hits: list[DetectorHit]) -> PolicyDecision:
-    if not hits:
+def _rank_for_action(action: str | None) -> PolicyRank:
+    if not action:
+        return PolicyRank.ALLOW
+    try:
+        return PolicyRank[action]
+    except KeyError:
+        return PolicyRank.ALLOW
+
+
+def apply_policy(
+    output: list[dict[str, Any]],
+    hits: list[DetectorHit],
+    *,
+    nimbus_action: str | None = None,
+) -> PolicyDecision:
+    nimbus_rank = _rank_for_action(nimbus_action)
+    if not hits and nimbus_rank == PolicyRank.ALLOW:
         text = _output_text(output)
         return PolicyDecision(action="ALLOW", output=output, output_text=text)
 
-    rank = max((_rank_for_hit(hit) for hit in hits), default=PolicyRank.ALLOW)
+    hit_rank = max((_rank_for_hit(hit) for hit in hits), default=PolicyRank.ALLOW)
+    rank = max(hit_rank, nimbus_rank)
     action = PolicyRank(rank).name
 
     if rank >= PolicyRank.BLOCK:
-        blocked_text = "[BLOCKED: registered canary detected in model output]"
+        blocked_text = (
+            "[BLOCKED: registered canary detected in model output]"
+            if hit_rank >= PolicyRank.BLOCK
+            else "[BLOCKED: cumulative leakage budget exceeded]"
+        )
         blocked_output = [
             {
                 "type": "message",
