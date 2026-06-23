@@ -90,6 +90,8 @@ def attack_playground() -> None:
                 "hex_leak",
                 "markdown_link_leak",
                 "tool_call_leak",
+                "http_get_url_leak",
+                "benign_tool_call",
             ],
         )
         model_adapter = st.selectbox("Model adapter", ["mock", "openai", "ollama"])
@@ -134,7 +136,33 @@ def attack_playground() -> None:
 
 def tool_calls() -> None:
     st.header("Tool Calls")
-    show_table("/tool-calls")
+    rows = show_table("/tool-calls")
+    if not rows:
+        return
+
+    call_ids = [row["call_id"] for row in rows]
+    selected_call_id = st.selectbox("Tool call", call_ids)
+    selected = next(row for row in rows if row["call_id"] == selected_call_id)
+    st.subheader("Arguments")
+    st.json(selected.get("arguments_json"))
+    st.subheader("Result")
+    st.json(selected.get("result_json"))
+    st.subheader("Related Detector Hits")
+    try:
+        detector_events = api_get("/detector-events")
+    except requests.RequestException as exc:
+        st.error(f"Detector event request failed: {exc}")
+        return
+    related = [
+        event
+        for event in detector_events
+        if event.get("request_id") == selected.get("request_id")
+        and "function_call.arguments" in event.get("surface", "")
+    ]
+    if related:
+        st.dataframe(related, use_container_width=True)
+    else:
+        st.info("No function-call detector hits for this tool call.")
 
 
 def leakage_ledger() -> None:

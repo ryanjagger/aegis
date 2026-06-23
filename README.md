@@ -90,7 +90,29 @@ curl -s http://localhost:8000/chat \
 - `base64_leak`: model emits a Base64-encoded canary.
 - `hex_leak`: model emits a hex-encoded canary.
 - `markdown_link_leak`: model embeds a canary in a markdown URL.
-- `tool_call_leak`: model emits a `function_call` whose JSON arguments contain a canary.
+- `tool_call_leak`: model emits a `send_email` function call whose JSON body contains a canary.
+- `http_get_url_leak`: model emits an `http_get` function call with a Base64 canary in a URL query value.
+- `benign_tool_call`: model emits a safe `send_email` call that is scanned and executed locally.
+
+## Phase 2 Tool Interception
+
+Every `function_call` output Item passes through ToolProxy before fake local
+execution. ToolProxy parses JSON arguments, scans the raw and serialized
+arguments, flattens nested string values, parses URLs and query parameters, and
+applies the same canary and credential-shape detectors used for text output.
+
+Unsafe tool calls are blocked and persisted with `executed = false`. Safe calls
+execute only local fake tools and persist their fake result in `tool_calls`.
+
+The fake tools are:
+
+- `send_email(to, subject, body)`
+- `http_get(url, headers)`
+- `create_ticket(title, description)`
+- `write_file(path, content)`
+- `query_kb(query)`
+
+They do not send email, perform outbound network calls, or write files.
 
 ## Tests
 
@@ -98,6 +120,5 @@ curl -s http://localhost:8000/chat \
 pytest
 ```
 
-NIMBUS-lite and fake tool execution are reserved for later phases. The current
-implementation includes schema/endpoints and placeholders for those areas, plus
-function-call argument scanning and blocked tool-call trace persistence.
+NIMBUS-lite is reserved for a later phase. The current implementation includes
+schema/endpoints and placeholders for that area.

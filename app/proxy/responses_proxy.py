@@ -20,6 +20,7 @@ from app.scanners.canary_scanner import CanaryScanner
 from app.scanners.responses_item_scanner import ResponsesItemScanner
 from app.schemas.api import NormalizedAISRequest
 from app.schemas.events import DetectorHit
+from app.tools.tool_proxy import ToolProxy, ToolProxyResult
 
 
 def get_adapter(name: str) -> BaseResponsesAdapter:
@@ -113,52 +114,34 @@ def run_responses_pipeline(
             item=item,
         )
 
-    hits: list[DetectorHit] = []
+    output_hits: list[DetectorHit] = []
+    tool_results: list[ToolProxyResult] = []
     db.flush()
     canaries = list_canaries_for_request(db, request_id)
     if normalized.defenses.output_scanning:
-        scan_serialized = normalized.defenses.tool_scanning
         scanner = ResponsesItemScanner(CanaryScanner(canaries))
-        hits = scanner.scan_output(
+        output_hits = scanner.scan_output(
             model_response.output,
             scan_messages=True,
-            scan_tool_items=normalized.defenses.tool_scanning,
-            scan_serialized_output=scan_serialized,
+            scan_tool_items=False,
+            scan_serialized_output=False,
         )
-        for hit in hits:
-            repository.add_detector_hit(
-                db,
-                request_id=request_id,
-                response_id=response_id,
-                session_id=normalized.session_id,
-                hit=hit,
-            )
-            if hit.matched_canary_id:
-                repository.mark_canary_leaked(
-                    db,
-                    canary_id=hit.matched_canary_id,
-                    response_id=response_id,
-                    surface=hit.surface,
-                )
-            bus.emit(
-                "detector.hit",
-                {
-                    "detector": hit.detector,
-                    "surface": hit.surface,
-                    "severity": hit.severity,
-                    "matched_canary_id": hit.matched_canary_id,
-                },
-                response_id=response_id,
-            )
+        _persist_output_hits(
+            db,
+            bus=bus,
+            request=normalized,
+            hits=output_hits,
+        )
 
-    decision = apply_policy(model_response.output, hits)
-    _record_function_calls(
+    tool_results = _handle_function_calls(
         db,
         request=normalized,
         output=model_response.output,
-        hits=hits,
-        blocked=decision.action == "BLOCK",
+        canary_scanner=CanaryScanner(canaries),
     )
+    all_hits = [*output_hits, *[hit for result in tool_results for hit in result.hits]]
+
+    decision = apply_policy(model_response.output, all_hits)
     repository.set_canary_response_id(db, request_id=request_id, response_id=response_id)
 
     final_response = _build_response_object(
@@ -166,7 +149,8 @@ def run_responses_pipeline(
         output=decision.output,
         status=model_response.status,
         policy_action=decision.action,
-        detector_hit_count=len(hits),
+        detector_hit_count=len(all_hits),
+        tool_results=tool_results,
     )
     raw_response = _build_response_object(
         normalized=normalized,
@@ -174,6 +158,7 @@ def run_responses_pipeline(
         status=model_response.status,
         policy_action="RAW",
         detector_hit_count=0,
+        tool_results=tool_results,
     )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -214,7 +199,7 @@ def run_responses_pipeline(
     )
     bus.emit(
         "policy.applied",
-        {"policy_action": decision.action, "detector_hit_count": len(hits)},
+        {"policy_action": decision.action, "detector_hit_count": len(all_hits)},
         response_id=response_id,
     )
     bus.emit("response.returned", {"status": model_response.status}, response_id=response_id)
@@ -229,7 +214,12 @@ def _build_response_object(
     status: str,
     policy_action: str,
     detector_hit_count: int,
+    tool_results: list[ToolProxyResult] | None = None,
 ) -> dict[str, Any]:
+    tool_results = tool_results or []
+    tool_call_count = len(tool_results)
+    tool_blocked_count = sum(1 for result in tool_results if not result.allowed)
+    tool_executed_count = sum(1 for result in tool_results if result.executed)
     return {
         "id": normalized.response_id,
         "object": "response",
@@ -242,6 +232,9 @@ def _build_response_object(
             "ais_session_id": normalized.session_id,
             "ais_policy_action": policy_action,
             "ais_detector_hit_count": str(detector_hit_count),
+            "ais_tool_call_count": str(tool_call_count),
+            "ais_tool_blocked_count": str(tool_blocked_count),
+            "ais_tool_executed_count": str(tool_executed_count),
         },
     }
 
@@ -256,56 +249,58 @@ def _extract_user_input(normalized: NormalizedAISRequest) -> str | None:
     return None
 
 
-def _record_function_calls(
+def _persist_output_hits(
     db: Session,
     *,
+    bus: EventBus,
     request: NormalizedAISRequest,
-    output: list[dict[str, Any]],
     hits: list[DetectorHit],
-    blocked: bool,
 ) -> None:
-    blocked_surfaces = {
-        hit.surface
-        for hit in hits
-        if hit.policy_recommendation == "BLOCK" and "function_call" in hit.surface
-    }
-    for item in output:
-        if item.get("type") != "function_call":
-            continue
-        arguments = item.get("arguments")
-        parsed_arguments: Any = arguments
-        if isinstance(arguments, str):
-            try:
-                parsed_arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                parsed_arguments = arguments
-
-        call_blocked = blocked and bool(blocked_surfaces)
-        repository.add_tool_call(
+    for hit in hits:
+        repository.add_detector_hit(
             db,
             request_id=request.request_id,
             response_id=request.response_id or "",
             session_id=request.session_id,
-            call_id=str(item.get("call_id") or repository.short_id("call")),
-            tool_name=str(item.get("name") or "unknown"),
-            arguments=parsed_arguments,
-            allowed=not call_blocked,
-            executed=False,
-            result=None,
-            block_reason=(
-                "registered_canary_detected" if call_blocked else "tool_execution_deferred"
-            ),
+            hit=hit,
         )
-        repository.add_event(
-            db,
-            request_id=request.request_id,
-            response_id=request.response_id,
-            session_id=request.session_id,
-            event_type="tool_call.blocked" if call_blocked else "tool_call.allowed",
-            payload={
-                "tool_name": str(item.get("name") or "unknown"),
-                "call_id": str(item.get("call_id") or ""),
-                "executed": False,
-                "blocked_surfaces": sorted(blocked_surfaces),
+        if hit.matched_canary_id:
+            repository.mark_canary_leaked(
+                db,
+                canary_id=hit.matched_canary_id,
+                response_id=request.response_id or "",
+                surface=hit.surface,
+            )
+        bus.emit(
+            "detector.hit",
+            {
+                "detector": hit.detector,
+                "surface": hit.surface,
+                "severity": hit.severity,
+                "matched_canary_id": hit.matched_canary_id,
             },
+            response_id=request.response_id,
         )
+
+
+def _handle_function_calls(
+    db: Session,
+    *,
+    request: NormalizedAISRequest,
+    output: list[dict[str, Any]],
+    canary_scanner: CanaryScanner,
+) -> list[ToolProxyResult]:
+    proxy = ToolProxy(
+        db,
+        request_id=request.request_id,
+        response_id=request.response_id or "",
+        session_id=request.session_id,
+        canary_scanner=canary_scanner,
+        scan_enabled=request.defenses.tool_scanning,
+    )
+    results: list[ToolProxyResult] = []
+    for index, item in enumerate(output):
+        if item.get("type") != "function_call":
+            continue
+        results.append(proxy.handle_function_call(item, item_index=index))
+    return results
