@@ -148,3 +148,63 @@ def load_baseline(path: str | Path) -> MahalanobisBaseline:
         ridge=float(data["ridge"]),
         fingerprint=json.loads(str(data["fingerprint"])),
     )
+
+
+@dataclass(frozen=True)
+class OperatingPoint:
+    """A red/green decision threshold for a fitted baseline, plus benign spread.
+
+    Derived unsupervised from benign scores (no attack labels): the threshold is
+    the ``1 - target_fpr`` quantile of the benign score distribution, so ~``target_fpr``
+    of benign prompts land above it. ``benign_mean``/``benign_std`` let a UI scale a
+    gauge relative to the benign cloud rather than to absolute Mahalanobis units.
+    """
+
+    threshold: float
+    benign_mean: float
+    benign_std: float
+    target_fpr: float
+
+    def as_dict(self) -> dict:
+        return {
+            "threshold": self.threshold,
+            "benign_mean": self.benign_mean,
+            "benign_std": self.benign_std,
+            "target_fpr": self.target_fpr,
+        }
+
+
+def operating_point_from_benign_scores(
+    benign_scores: np.ndarray, *, target_fpr: float = 0.05
+) -> OperatingPoint:
+    """Pick an operating threshold at the ``1 - target_fpr`` benign quantile."""
+
+    s = np.asarray(benign_scores, dtype=np.float64).ravel()
+    if s.size == 0:
+        raise ValueError("benign_scores must be non-empty to choose an operating point")
+    threshold = float(np.quantile(s, 1.0 - target_fpr))
+    return OperatingPoint(
+        threshold=threshold,
+        benign_mean=float(s.mean()),
+        benign_std=float(s.std() + _EPS),
+        target_fpr=float(target_fpr),
+    )
+
+
+def save_operating_point(op: OperatingPoint, path: str | Path) -> Path:
+    """Persist an operating point as JSON next to its baseline."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(op.as_dict(), indent=2))
+    return path
+
+
+def load_operating_point(path: str | Path) -> OperatingPoint:
+    data = json.loads(Path(path).read_text())
+    return OperatingPoint(
+        threshold=float(data["threshold"]),
+        benign_mean=float(data["benign_mean"]),
+        benign_std=float(data["benign_std"]),
+        target_fpr=float(data["target_fpr"]),
+    )

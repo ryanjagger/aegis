@@ -22,8 +22,10 @@ from cift.detector import (
     Metrics,
     evaluate_metrics,
     fit_baseline,
+    operating_point_from_benign_scores,
     per_layer_scores,
     save_baseline,
+    save_operating_point,
     score,
 )
 from cift.evaluate import ContrastRow, ControlResult, run_contrast, run_positive_control
@@ -108,9 +110,15 @@ def main() -> None:  # pragma: no cover - model-driven entrypoint
     baseline = fit_baseline(benign_fit, ridge=settings.cift_ridge, fingerprint=fingerprint(device))
     save_baseline(baseline, artifacts / "baseline.npz")
 
-    scores = np.concatenate([score(baseline, benign_held), score(baseline, attack_held)])
+    benign_held_scores = score(baseline, benign_held)
+    scores = np.concatenate([benign_held_scores, score(baseline, attack_held)])
     labels = np.concatenate([np.zeros(len(benign_held)), np.ones(len(attack_held))])
     metrics = evaluate_metrics(scores, labels)
+
+    # Persist an unsupervised operating point (benign-quantile threshold) so the
+    # live monitor (cift/live_monitor.py) has a red/green line without recomputing.
+    operating_point = operating_point_from_benign_scores(benign_held_scores)
+    save_operating_point(operating_point, artifacts / "threshold.json")
 
     benign_layers = per_layer_scores(baseline, benign_held)
     attack_layers = per_layer_scores(baseline, attack_held)

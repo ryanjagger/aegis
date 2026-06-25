@@ -10,8 +10,11 @@ from cift.detector import (  # noqa: E402
     fit_baseline,
     fpr_at_tpr,
     load_baseline,
+    load_operating_point,
+    operating_point_from_benign_scores,
     per_layer_scores,
     save_baseline,
+    save_operating_point,
     score,
 )
 
@@ -91,3 +94,26 @@ def test_baseline_round_trips(tmp_path):
     assert np.allclose(loaded.mean, baseline.mean)
     assert loaded.ridge == baseline.ridge
     assert loaded.fingerprint == {"torch": "x"}
+
+
+def test_operating_point_threshold_matches_target_fpr():
+    # The benign-quantile threshold should leave ~target_fpr of benign above it.
+    rng = np.random.default_rng(13)
+    benign_scores = rng.normal(10.0, 2.0, size=2000)
+    op = operating_point_from_benign_scores(benign_scores, target_fpr=0.05)
+    empirical_fpr = float((benign_scores >= op.threshold).mean())
+    assert abs(empirical_fpr - 0.05) < 0.02
+    assert op.threshold > op.benign_mean  # an upper-tail cut sits above the mean
+
+
+def test_operating_point_round_trips(tmp_path):
+    op = operating_point_from_benign_scores(np.linspace(0.0, 100.0, 200), target_fpr=0.1)
+    loaded = load_operating_point(save_operating_point(op, tmp_path / "threshold.json"))
+    assert loaded.threshold == op.threshold
+    assert loaded.benign_mean == op.benign_mean
+    assert loaded.target_fpr == op.target_fpr
+
+
+def test_operating_point_rejects_empty():
+    with pytest.raises(ValueError):
+        operating_point_from_benign_scores(np.array([]))
