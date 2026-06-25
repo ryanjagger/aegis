@@ -37,7 +37,7 @@ uv sync
 ## Run Backend
 
 ```bash
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 
 The backend initializes `ais.db` automatically.
@@ -45,7 +45,7 @@ The backend initializes `ais.db` automatically.
 ## Run Dashboard
 
 ```bash
-streamlit run dashboard/streamlit_app.py
+uv run streamlit run dashboard/streamlit_app.py
 ```
 
 Set `AIS_API_BASE` if the backend is not at `http://localhost:8000`.
@@ -139,5 +139,5 @@ cumulative budget.
 ## Tests
 
 ```bash
-pytest
+uv run pytest
 ```
