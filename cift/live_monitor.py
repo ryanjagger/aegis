@@ -21,17 +21,27 @@ Honesty notes baked into the UI (this lab's whole theme):
 
 from __future__ import annotations
 
-import time
+import sys
 from pathlib import Path
 
-import pandas as pd
-import streamlit as st
+# `streamlit run cift/live_monitor.py` puts the script's directory (cift/) on
+# sys.path, not the repo root, and this project is not pip-installed (the tests
+# rely on pytest's pythonpath="."). So `import app`/`import cift` would fail —
+# put the repo root on the path ourselves before importing them.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-from app.canaries.generator import first_canary_like_value
-from app.config import get_settings
-from app.scanners.canary_scanner import CanaryScanner
-from cift.corpus import blatant_control_prompts, build_corpus
-from cift.detector import (
+import time  # noqa: E402
+
+import pandas as pd  # noqa: E402
+import streamlit as st  # noqa: E402
+
+from app.canaries.generator import first_canary_like_value  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.scanners.canary_scanner import CanaryScanner  # noqa: E402
+from cift.corpus import blatant_control_prompts, build_corpus  # noqa: E402
+from cift.detector import (  # noqa: E402
     load_baseline,
     load_operating_point,
     operating_point_from_benign_scores,
@@ -39,8 +49,8 @@ from cift.detector import (
     save_operating_point,
     score,
 )
-from cift.extraction import extract_features, extract_many, generate_text, get_model
-from cift.live_logic import gauge_fraction, layer_labels, verdict_is_attack
+from cift.extraction import extract_features, extract_many, generate_text, get_model  # noqa: E402
+from cift.live_logic import gauge_fraction, layer_labels, verdict_is_attack  # noqa: E402
 
 ARTIFACTS_SUBPATH = ("cift", "artifacts")
 CALIBRATION_N = 24
