@@ -67,6 +67,24 @@ def get_model(model_name: str | None = None, device: str | None = None):
     return _load(name, dev), dev
 
 
+def _encode(tokenizer, text: str, dev: str) -> dict:
+    """Chat-template-encode one prompt to a dict of model inputs on ``dev``.
+
+    transformers v5 ``apply_chat_template(return_tensors="pt")`` returns a
+    BatchEncoding, so we request ``return_dict=True`` and splat it into the model
+    (which also passes ``attention_mask``). ``add_generation_prompt=True`` makes
+    the final token the genuine pre-generation readout position.
+    """
+
+    enc = tokenizer.apply_chat_template(
+        [{"role": "user", "content": text}],
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    return {k: v.to(dev) for k, v in enc.items()}
+
+
 def last_k(num_layers: int) -> int:
     """K = floor(0.25 * L); the paper's default monitored window of late layers."""
 
@@ -104,13 +122,10 @@ def extract_features(
     """
 
     (tokenizer, model), dev = get_model(model_name, device)
-    messages = [{"role": "user", "content": text}]
-    input_ids = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True, return_tensors="pt"
-    ).to(dev)
+    enc = _encode(tokenizer, text, dev)
 
     with torch.no_grad():
-        out = model(input_ids, output_hidden_states=True, use_cache=False)
+        out = model(**enc, output_hidden_states=True, use_cache=False)
 
     k = last_k(model.config.num_hidden_layers)
     # hidden_states is length L+1 (index 0 = embeddings); take the last K layers.
@@ -134,13 +149,10 @@ def generate_text(
     """
 
     (tokenizer, model), dev = get_model(model_name, device)
-    messages = [{"role": "user", "content": text}]
-    input_ids = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True, return_tensors="pt"
-    ).to(dev)
+    enc = _encode(tokenizer, text, dev)
     with torch.no_grad():
-        out = model.generate(input_ids, max_new_tokens=max_new_tokens, do_sample=False)
-    completion = out[0, input_ids.shape[1] :]
+        out = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False)
+    completion = out[0, enc["input_ids"].shape[1] :]
     return tokenizer.decode(completion, skip_special_tokens=True)
 
 
