@@ -114,15 +114,17 @@ def compute_contrast(records: list[ContrastRecord]) -> dict[str, ContrastRow]:
 
 
 def run_positive_control(corpus: Corpus, *, ridge: float = 1e-2) -> ControlResult:
-    """Real-model control: extract benign vs strongly-steering features and check
-    they separate. Exercises model load, chat template, and readout selection — so
-    a harness bug (mis-indexed readout, wrong dtype) is caught before any null is
-    interpreted."""
+    """Real-model control on a *blatant* must-separate case (not the matched-surface
+    corpus). Exercises model load, chat template, and readout selection end to end,
+    so a harness bug (mis-indexed readout, wrong dtype) is caught before any null
+    corpus result is interpreted."""
 
+    from cift.corpus import blatant_control_prompts
     from cift.extraction import extract_many
 
-    benign = extract_many([p.text for p in corpus.benign_fit[:40]])
-    attack = extract_many([p.text for p in corpus.attack_fit[:40]])
+    benign_texts, attack_texts = blatant_control_prompts()
+    benign = extract_many(benign_texts)
+    attack = extract_many(attack_texts)
     return positive_control_from_features(benign, attack, ridge=ridge)
 
 

@@ -76,7 +76,18 @@ def test_every_attack_prompt_embeds_a_canary():
         assert prompt.canary.value in prompt.text
 
 
-def test_corpus_is_deterministic():
+def test_corpus_structure_is_deterministic():
+    # Canary *values* are fresh secrets each build, so the corpus is deterministic
+    # in structure (templates, topics, order, labels) with secret values masked.
     a = build_corpus(seed=7, n_benign=30)
     b = build_corpus(seed=7, n_benign=30)
-    assert [p.text for p in a.benign_fit] == [p.text for p in b.benign_fit]
+
+    def skeleton(prompts):
+        rows = []
+        for p in prompts:
+            text = p.text.replace(p.canary.value, "<SECRET>") if p.canary else p.text
+            rows.append((p.label, p.arm, text))
+        return rows
+
+    assert skeleton(a.benign_fit) == skeleton(b.benign_fit)
+    assert skeleton(a.attack_fit) == skeleton(b.attack_fit)

@@ -54,3 +54,17 @@ def test_interpretation_reports_result_when_control_passed():
     assert "AUROC 0.83" in text
     assert "rot13: text 0.10, CIFT 0.88" in text
     assert "encoding success rate" in text.lower()
+    assert "late layers carrying the signal" in text
+
+
+def test_interpretation_does_not_overclaim_on_null_result():
+    # A near-chance AUROC must NOT claim late-layer signal, even with a control pass.
+    text = build_interpretation(
+        ControlResult(auroc=1.0, passed=True),
+        Metrics(auroc=0.27, f1=0.0, fpr=0.0, threshold=5.0),
+        None,
+        None,
+        np.array([-40.0, -47.0, -10.0]),  # negative gaps = no separation
+    )
+    assert "no meaningful separation" in text.lower()
+    assert "late layers carrying the signal" not in text

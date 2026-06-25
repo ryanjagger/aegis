@@ -57,12 +57,20 @@ def build_interpretation(
         ]
         return "\n".join(lines)
 
+    separated = metrics is not None and metrics.auroc > 0.55
     if metrics is not None:
         lines.append(
             f"Main detection (held-out): AUROC {metrics.auroc:.3f}, F1 {metrics.f1:.3f}, "
             f"FPR {metrics.fpr:.3f}."
         )
-    if layer_gap is not None and layer_gap.size:
+    if not separated and metrics is not None:
+        lines.append(
+            "No meaningful separation on this model (AUROC at or below chance). The blatant "
+            "positive control separated cleanly, so this points to model capacity on the "
+            "subtle matched-surface steer, not a harness bug — stepping up to the 1.5B model "
+            "is the next lever."
+        )
+    elif separated and layer_gap is not None and layer_gap.size and (layer_gap > 0).any():
         top = int(np.argmax(layer_gap))
         lines.append(
             f"Strongest per-layer separation at monitored layer index {top} "
