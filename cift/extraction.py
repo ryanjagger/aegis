@@ -119,6 +119,31 @@ def extract_features(
     return readout.to(torch.float32).cpu().numpy()
 
 
+def generate_text(
+    text: str,
+    *,
+    max_new_tokens: int = 96,
+    model_name: str | None = None,
+    device: str | None = None,
+) -> str:
+    """Greedy-decode the model's reply to ``text`` (for the text-scanner arm).
+
+    The contrast needs the model's actual output so the text scanner has something
+    to scan; the CIFT arm reads the prompt-side activations from
+    ``extract_features``. Greedy decoding keeps the lab reproducible.
+    """
+
+    (tokenizer, model), dev = get_model(model_name, device)
+    messages = [{"role": "user", "content": text}]
+    input_ids = tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True, return_tensors="pt"
+    ).to(dev)
+    with torch.no_grad():
+        out = model.generate(input_ids, max_new_tokens=max_new_tokens, do_sample=False)
+    completion = out[0, input_ids.shape[1] :]
+    return tokenizer.decode(completion, skip_special_tokens=True)
+
+
 def extract_many(
     texts: list[str],
     *,
