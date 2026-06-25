@@ -21,6 +21,15 @@ dev = [
     "pytest>=8.2.0",
     "ruff>=0.5.0",
 ]
+# Opt-in heavy ML stack for the CIFT activation-probe lab. Not installed by the
+# default `uv sync`; install with `uv sync --group cift`. Keeping torch out of
+# the default path keeps the demo install and the base test suite light.
+cift = [
+    "torch>=2.2.0",
+    "transformers>=5,<6",
+    "scikit-learn>=1.4.0",
+    "matplotlib>=3.8.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
