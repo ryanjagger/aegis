@@ -53,7 +53,9 @@ from cift.extraction import extract_features, extract_many, generate_text, get_m
 from cift.live_logic import gauge_fraction, layer_labels, verdict_is_attack  # noqa: E402
 
 ARTIFACTS_SUBPATH = ("cift", "artifacts")
-CALIBRATION_N = 24
+# Calibrate the operating threshold on a solid benign sample; a small sample gives
+# a noisy 95th-percentile estimate (the threshold every verdict depends on).
+CALIBRATION_N = 60
 
 
 @st.cache_resource(show_spinner=False)
@@ -199,10 +201,10 @@ def main() -> None:
         )
         st.stop()
 
-    with st.spinner("Calibrating operating point (first run only)…"):
+    with st.spinner(f"Preparing operating point (calibrates on {CALIBRATION_N} benign prompts)…"):
         op, freshly_calibrated = load_operating(baseline, str(artifacts), CALIBRATION_N)
     if freshly_calibrated:
-        st.toast("Calibrated an operating point from benign held-out prompts.")
+        st.toast(f"Calibrated from {CALIBRATION_N} benign held-out prompts.")
 
     st.sidebar.header("Settings")
     animate = st.sidebar.checkbox("Animate output (token-by-token reveal)", value=True)
@@ -212,6 +214,10 @@ def main() -> None:
         f"~{int(round(op.target_fpr * 100))}% benign false-positive rate · "
         f"model `{settings.cift_model_name}`"
     )
+    if st.sidebar.button("Recalibrate operating point"):
+        (artifacts / "threshold.json").unlink(missing_ok=True)
+        load_operating.clear()
+        st.rerun()
     st.sidebar.caption(
         "Gauge = distance from the matched-surface benign cloud. On 1.5B the steered-vs-benign "
         "separation is real but modest (AUROC ~0.68) and scales with model size."
