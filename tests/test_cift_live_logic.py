@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from cift.live_logic import (
+    footer_message,
     gauge_fraction,
     layer_labels,
     leak_char_index,
@@ -44,3 +45,40 @@ def test_layer_labels_name_the_last_k_layers():
     # 28-layer model, K=7 -> the monitored window is L22..L28.
     assert layer_labels(28, 7) == ["L22", "L23", "L24", "L25", "L26", "L27", "L28"]
     assert layer_labels(24, 1) == ["L24"]
+
+
+def test_footer_claims_advantage_only_when_cift_was_right():
+    msg = footer_message(cift_flagged=True, scanner_fired=True, scannable=True, leak_token=63)
+    assert "pre-output advantage" in msg
+    assert "token 63" in msg
+
+
+def test_footer_calls_a_miss_a_miss():
+    # The key honesty case: CIFT said benign, the scanner caught a real leak.
+    msg = footer_message(cift_flagged=False, scanner_fired=True, scannable=True, leak_token=63)
+    assert "missed" in msg.lower()
+    assert "advantage" not in msg.lower()
+    assert "token 63" in msg
+
+
+def test_footer_intent_without_realized_leak():
+    msg = footer_message(cift_flagged=True, scanner_fired=False, scannable=True, leak_token=None)
+    assert "did not emit the secret" in msg
+    assert "advantage" not in msg.lower()
+
+
+def test_footer_both_clean():
+    msg = footer_message(cift_flagged=False, scanner_fired=False, scannable=True, leak_token=None)
+    assert "both read this as clean" in msg
+
+
+def test_footer_no_secret_registered_reports_cift_only():
+    flagged = footer_message(
+        cift_flagged=True, scanner_fired=False, scannable=False, leak_token=None
+    )
+    assert "only CIFT ran" in flagged
+    assert "credential-seeking" in flagged
+    benign = footer_message(
+        cift_flagged=False, scanner_fired=False, scannable=False, leak_token=None
+    )
+    assert "read it as benign" in benign

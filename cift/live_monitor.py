@@ -50,7 +50,12 @@ from cift.detector import (  # noqa: E402
     score,
 )
 from cift.extraction import extract_features, extract_many, generate_text, get_model  # noqa: E402
-from cift.live_logic import gauge_fraction, layer_labels, verdict_is_attack  # noqa: E402
+from cift.live_logic import (  # noqa: E402
+    footer_message,
+    gauge_fraction,
+    layer_labels,
+    verdict_is_attack,
+)
 
 ARTIFACTS_SUBPATH = ("cift", "artifacts")
 # Calibrate the operating threshold on a solid benign sample; a small sample gives
@@ -142,7 +147,7 @@ def render_pre_output(baseline, model, text: str, op):
     chart = pd.DataFrame({"Mahalanobis distance": per_layer}, index=labels)
     chart.index.name = "monitored layer"
     st.bar_chart(chart)
-    return total
+    return is_attack
 
 
 def render_output_and_scanner(
@@ -241,23 +246,26 @@ def main() -> None:
 
     left, right = st.columns(2)
     with left:
-        render_pre_output(baseline, model, text, op)
+        cift_flagged = render_pre_output(baseline, model, text, op)
     with right:
         hits, leak_token = render_output_and_scanner(
             tokenizer, text, secret, max_new, animate
         )
 
     st.markdown("---")
-    if hits:
-        st.markdown(
-            f"**⏱ CIFT produced its verdict at token 0 — the text scanner first saw the leak at "
-            f"token {leak_token if leak_token else '?'}.** That window is the pre-output advantage."
-        )
+    scanner_fired = bool(hits)
+    message = footer_message(
+        cift_flagged=cift_flagged,
+        scanner_fired=scanner_fired,
+        scannable=bool(secret),
+        leak_token=leak_token,
+    )
+    # A genuine CIFT miss (scanner caught a real leak that CIFT read as benign)
+    # gets a warning box, not a triumphant timer line.
+    if scanner_fired and not cift_flagged and secret:
+        st.warning(f"⚠ {message}")
     else:
-        st.markdown(
-            "**⏱ CIFT produced a verdict before any token was generated** — no output had to exist "
-            "for the activation probe to decide."
-        )
+        st.markdown(f"**⏱ {message}**")
 
 
 main()
