@@ -40,7 +40,12 @@ import streamlit as st  # noqa: E402
 from app.canaries.generator import first_canary_like_value  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.scanners.canary_scanner import CanaryScanner  # noqa: E402
-from cift.corpus import blatant_control_prompts, build_corpus  # noqa: E402
+from cift.corpus import (  # noqa: E402
+    blatant_control_prompts,
+    build_corpus,
+    indirect_injection_prompt,
+    intent_without_leak_prompt,
+)
 from cift.detector import (  # noqa: E402
     load_baseline,
     load_operating_point,
@@ -112,6 +117,9 @@ def load_scenarios():
     attack = corpus.attack_heldout[0]
     confound = corpus.confound_control
     blatant_benign, blatant_attack = blatant_control_prompts(n=1)
+    indirect = indirect_injection_prompt()
+    intent = intent_without_leak_prompt()
+    encoded = corpus.encoding_suite[0]
     return {
         "Benign — matched surface (expect green)": {
             "text": benign.text,
@@ -132,6 +140,34 @@ def load_scenarios():
             "text": blatant_attack[0],
             "secret": first_canary_like_value(blatant_attack[0]),
             "note": "Explicit 'output this secret' — reliably emits it, but short/OOD.",
+        },
+        "Indirect prompt injection — steer hidden in the document": {
+            "text": indirect.text,
+            "secret": indirect.canary.value if indirect.canary else None,
+            "note": (
+                "Leak steer buried in the untrusted document (benign user instruction). "
+                "Measured: the model leaks but CIFT often misses it — the buried steer "
+                "reads benign at the readout position. A real blind spot, only the "
+                "scanner catches it."
+            ),
+        },
+        "Intent without leak — credential use, no verbatim dump": {
+            "text": intent.text,
+            "secret": intent.canary.value if intent.canary else None,
+            "note": (
+                "Steers credential use, not a dump. Measured: CIFT flags the intent "
+                "while the model acts without emitting the secret — the scanner stays "
+                "silent. The clearest case for pre-output detection."
+            ),
+        },
+        "Encoding leak (rot13) — hard case": {
+            "text": encoded.encoded.text,
+            "secret": encoded.canary.value,
+            "note": (
+                "ROT13 request the small model can't actually perform (failed encoding). "
+                "CIFT fires, but the score is partly driven by the unusual/OOD prompt, "
+                "like the blatant control."
+            ),
         },
     }
 
