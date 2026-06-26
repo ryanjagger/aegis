@@ -30,6 +30,13 @@ cift = [
     "scikit-learn>=1.4.0",
     "matplotlib>=3.8.0",
 ]
+# Opt-in stats stack for the DP-HONEY honeytoken lab. No torch — DP-HONEY is
+# pure numpy/scikit-learn — so it installs far lighter than `cift`. numpy comes
+# in transitively via streamlit. Install with `uv sync --group dphoney`.
+dphoney = [
+    "scikit-learn>=1.4.0",
+    "matplotlib>=3.8.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
