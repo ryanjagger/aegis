@@ -46,6 +46,26 @@ def layer_labels(num_layers: int, k: int) -> list[str]:
     return [f"L{start + i}" for i in range(k)]
 
 
+def fingerprint_mismatch(saved: dict, current: dict) -> dict[str, tuple]:
+    """Fields where a saved baseline fingerprint disagrees with the current stack.
+
+    Returns ``{field: (saved, current)}`` for each compared key present in both
+    that differs; an empty dict means the baseline matches. Used to refuse scoring
+    activations against a baseline fit with a different model/device (or to warn on
+    a torch/transformers drift), since a persisted baseline is only trustworthy
+    against the same fingerprint.
+    """
+
+    if not saved:
+        return {}
+    diff: dict[str, tuple] = {}
+    for key in ("model", "device", "dtype", "torch", "transformers"):
+        s, c = saved.get(key), current.get(key)
+        if s is not None and c is not None and s != c:
+            diff[key] = (s, c)
+    return diff
+
+
 def footer_message(
     *, cift_flagged: bool, scanner_fired: bool, scannable: bool, leak_token: int | None
 ) -> str:

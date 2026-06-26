@@ -49,8 +49,15 @@ from cift.detector import (  # noqa: E402
     save_operating_point,
     score,
 )
-from cift.extraction import extract_features, extract_many, generate_text, get_model  # noqa: E402
+from cift.extraction import (  # noqa: E402
+    extract_features,
+    extract_many,
+    fingerprint,
+    generate_text,
+    get_model,
+)
 from cift.live_logic import (  # noqa: E402
+    fingerprint_mismatch,
     footer_message,
     gauge_fraction,
     layer_labels,
@@ -197,7 +204,7 @@ def main() -> None:
     )
 
     try:
-        settings, artifacts, baseline, tokenizer, model, _ = load_lab()
+        settings, artifacts, baseline, tokenizer, model, device = load_lab()
     except FileNotFoundError as exc:
         st.error(
             f"No fitted baseline at `{exc}`.\n\n"
@@ -205,6 +212,24 @@ def main() -> None:
             "```\nuv run --group cift python -m cift.run\n```"
         )
         st.stop()
+
+    # Refuse to score against a baseline fit with a different model/device — its
+    # scores would be meaningless. A version drift only warns.
+    fp_diff = fingerprint_mismatch(baseline.fingerprint or {}, fingerprint(device))
+    critical = {k: v for k, v in fp_diff.items() if k in ("model", "device")}
+    if critical:
+        rows = "\n".join(
+            f"- {k}: baseline `{s}` vs current `{c}`" for k, (s, c) in critical.items()
+        )
+        st.error(
+            "The fitted baseline does not match the current model/device, so its scores "
+            f"would be meaningless:\n\n{rows}\n\nRe-fit with the current settings:\n\n"
+            "```\nuv run --group cift python -m cift.run\n```"
+        )
+        st.stop()
+    if fp_diff:  # only non-critical fields differ (torch/transformers/dtype)
+        drift = ", ".join(f"{k}: {s} → {c}" for k, (s, c) in fp_diff.items())
+        st.warning(f"Baseline was fit with a different stack ({drift}); results may have drifted.")
 
     with st.spinner(f"Preparing operating point (calibrates on {CALIBRATION_N} benign prompts)…"):
         op, freshly_calibrated = load_operating(baseline, str(artifacts), CALIBRATION_N)

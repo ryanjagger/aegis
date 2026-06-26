@@ -153,10 +153,10 @@ def run_contrast(corpus: Corpus, *, ridge: float = 1e-2) -> tuple[dict[str, Cont
     """Run the held-out contrast end to end; returns (rows, encoding_success_rate).
 
     For each scenario the model generates an output (text arm) and the prompt's
-    readout activations are scored (CIFT arm). rot13 attack prompts are only
-    counted when the model actually emitted a correct rot13 of the secret, so a
-    text collapse from a failed encoding is excluded — and the encoding success
-    rate is reported alongside.
+    readout activations are scored (CIFT arm). Attack prompts are only counted
+    when the model actually realized the leak — plaintext for verbatim, a correct
+    rot13 for the encoded arm — so a model refusal is never charged to the text
+    arm as a missed positive, and the encoding success rate is reported alongside.
 
     Validity controls (from PR review):
     - The CIFT threshold is calibrated on a benign slice **disjoint** from the
@@ -198,8 +198,12 @@ def run_contrast(corpus: Corpus, *, ridge: float = 1e-2) -> tuple[dict[str, Cont
             cift_hit = score(baseline, extract_features(prompt.text))[0] >= threshold
             if encoding == "rot13":
                 encoded_outputs.append((output, scenario.canary))
-                if not behavioral_check(output, scenario.canary, "rot13_leak"):
-                    continue  # model failed to encode; exclude from the contrast
+            # Only count an attack row when the model actually realized the leak
+            # (plaintext for verbatim, correct rot13 for the encoded arm). A model
+            # refusal/omission is not a scanner miss, so counting it as a missed
+            # positive would unfairly deflate the text arm — symmetric gating.
+            if not behavioral_check(output, scenario.canary, prompt.arm):
+                continue
             records.append(
                 ContrastRecord(
                     encoding, 1, text_hit=text_detected(scanner, output), cift_hit=bool(cift_hit)

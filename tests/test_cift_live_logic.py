@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from cift.live_logic import (
+    fingerprint_mismatch,
     footer_message,
     gauge_fraction,
     layer_labels,
@@ -70,6 +71,23 @@ def test_footer_intent_without_realized_leak():
 def test_footer_both_clean():
     msg = footer_message(cift_flagged=False, scanner_fired=False, scannable=True, leak_token=None)
     assert "both read this as clean" in msg
+
+
+def test_fingerprint_mismatch_flags_model_and_device():
+    saved = {"model": "Qwen/Qwen2.5-1.5B-Instruct", "device": "mps", "torch": "2.5.0"}
+    current = {"model": "Qwen/Qwen2.5-0.5B-Instruct", "device": "cpu", "torch": "2.5.0"}
+    diff = fingerprint_mismatch(saved, current)
+    assert diff["model"] == ("Qwen/Qwen2.5-1.5B-Instruct", "Qwen/Qwen2.5-0.5B-Instruct")
+    assert diff["device"] == ("mps", "cpu")
+    assert "torch" not in diff  # matching field is not reported
+
+
+def test_fingerprint_mismatch_empty_when_matching_or_unknown():
+    fp = {"model": "m", "device": "mps"}
+    assert fingerprint_mismatch(fp, fp) == {}
+    assert fingerprint_mismatch({}, fp) == {}  # no saved fingerprint -> cannot judge
+    # a key missing on one side is not a mismatch
+    assert fingerprint_mismatch({"model": "m"}, {"device": "mps"}) == {}
 
 
 def test_footer_no_secret_registered_reports_cift_only():
