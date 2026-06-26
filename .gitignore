@@ -11,3 +11,5 @@ ais.db
 # CIFT lab outputs and model cache
 cift/artifacts/
 .cache/huggingface/
+# DP-HONEY lab outputs
+dphoney/artifacts/
