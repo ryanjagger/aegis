@@ -78,6 +78,7 @@ def run_responses_pipeline(
             request_id=request_id,
             session_id=normalized.session_id,
             response_id=response_id,
+            source=normalized.defenses.canary_source,
         )
         normalized.input_items = input_items
         normalized.injected_context = injected_context

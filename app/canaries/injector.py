@@ -40,8 +40,14 @@ def inject_canaries(
     request_id: str,
     session_id: str,
     response_id: str | None = None,
+    source: str = "template",
 ) -> tuple[list[dict[str, Any]], str, list[GeneratedCanary]]:
-    canaries = generate_canaries(formats=CANARY_FORMATS[:5], source_labels=SOURCE_LABELS)
+    if source == "dp":
+        from app.canaries.dp_source import generate_dp_canaries
+
+        canaries = generate_dp_canaries(formats=CANARY_FORMATS[:5], source_labels=SOURCE_LABELS)
+    else:
+        canaries = generate_canaries(formats=CANARY_FORMATS[:5], source_labels=SOURCE_LABELS)
     injected_context = build_injected_context(canaries)
     injected_item = {"role": "user", "content": injected_context}
 

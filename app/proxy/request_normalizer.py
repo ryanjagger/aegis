@@ -36,6 +36,16 @@ def _metadata_bool(metadata: dict[str, Any], *names: str, default: bool) -> bool
     return default
 
 
+def _canary_source(headers: Mapping[str, str], metadata: dict[str, Any]) -> str:
+    value = _header(headers, "X-AIS-Canary-Source", "X-AISIO-Canary-Source")
+    if not value:
+        for name in ("ais_canary_source", "aisio_canary_source"):
+            if isinstance(metadata.get(name), str):
+                value = metadata[name]
+                break
+    return "dp" if str(value or "").strip().lower() == "dp" else "template"
+
+
 def extract_defenses(headers: Mapping[str, str], metadata: dict[str, Any]) -> DefenseConfig:
     return DefenseConfig(
         canary_injection=_truthy(
@@ -69,6 +79,7 @@ def extract_defenses(headers: Mapping[str, str], metadata: dict[str, Any]) -> De
             _header(headers, "X-AIS-Nimbus-Lite", "X-AISIO-Nimbus-Lite"),
             _metadata_bool(metadata, "ais_nimbus_lite", "aisio_nimbus_lite", default=False),
         ),
+        canary_source=_canary_source(headers, metadata),
     )
 
 

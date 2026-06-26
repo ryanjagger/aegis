@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class DefenseConfig(BaseModel):
     canary_injection: bool = True
+    # Which canary generator feeds the injection path. "template" is the
+    # deterministic-format default; "dp" uses the DP-HONEY model (U6).
+    canary_source: Literal["template", "dp"] = "template"
     output_scanning: bool = True
     tool_scanning: bool = True
     nimbus_lite: bool = False

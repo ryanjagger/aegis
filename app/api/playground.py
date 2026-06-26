@@ -29,6 +29,7 @@ def run_playground(
             "scenario": payload.scenario,
             "model_adapter": payload.model_adapter,
             "ais_canary_injection": payload.defenses.canary_injection,
+            "ais_canary_source": payload.defenses.canary_source,
             "ais_output_scanning": payload.defenses.output_scanning,
             "ais_tool_scanning": payload.defenses.tool_scanning,
             "ais_nimbus_lite": payload.defenses.nimbus_lite,
