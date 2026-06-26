@@ -1,0 +1,12 @@
+# Streamlit project config.
+#
+# Disable the source-file watcher. To detect edits, the watcher walks every
+# imported module, which forces transformers' lazy loader to import ALL of its
+# model submodules — including image processors like `zoedepth` that require
+# `torchvision`. That package isn't installed and isn't needed by this text-only
+# lab, so the walk raised a spurious `ModuleNotFoundError: No module named
+# 'torchvision'` on startup (confirmed: the app's own imports and model load do
+# not need torchvision). Disabling the watcher removes the trigger. The only cost
+# is no auto-rerun on source edits — just refresh the browser instead.
+[server]
+fileWatcherType = "none"

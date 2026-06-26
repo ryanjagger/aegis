@@ -189,6 +189,12 @@ first launch. Pick a built-in scenario (matched-surface benign, the measured
 steered leak, the exfil-vocabulary confound, or a blatant out-of-distribution
 control) or type your own prompt.
 
+`.streamlit/config.toml` disables Streamlit's file watcher on purpose: the
+watcher walks every imported module, which makes transformers eagerly import
+model submodules that need `torchvision` (not installed, and not used here),
+producing a spurious `ModuleNotFoundError` on startup. The only cost is no
+auto-rerun on source edits — refresh the browser instead.
+
 Set `AIS_CIFT_MODEL=Qwen/Qwen2.5-0.5B-Instruct` for a faster, smaller run, or
 `AIS_CIFT_DEVICE=cpu` to force CPU. The model-in-the-loop extraction tests are
 opt-in:
