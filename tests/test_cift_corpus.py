@@ -6,6 +6,8 @@ from cift.corpus import (
     behavioral_check,
     build_corpus,
     encoding_success_rate,
+    indirect_injection_prompt,
+    intent_without_leak_prompt,
     rot13,
 )
 
@@ -74,6 +76,24 @@ def test_every_attack_prompt_embeds_a_canary():
     for prompt in corpus.attack_fit + corpus.attack_heldout:
         assert prompt.canary is not None
         assert prompt.canary.value in prompt.text
+
+
+def test_indirect_injection_hides_steer_in_document():
+    # The user instruction is a benign summary; the leak steer lives in the
+    # untrusted document body, and the secret is embedded for the model to access.
+    p = indirect_injection_prompt()
+    assert p.label == "attack" and p.canary is not None
+    assert p.canary.value in p.text  # secret present for the model to leak
+    assert "summarize" in p.text.lower()  # benign user-facing instruction
+    assert "--- document ---" in p.text  # steer is inside the untrusted content
+
+
+def test_intent_without_leak_steers_use_not_dump():
+    # Steers credential *use* (authenticate) rather than printing the value.
+    p = intent_without_leak_prompt()
+    assert p.label == "attack" and p.canary is not None
+    assert p.canary.value in p.text
+    assert "authenticate" in p.text.lower()
 
 
 def test_corpus_structure_is_deterministic():
