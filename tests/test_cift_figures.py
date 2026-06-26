@@ -30,6 +30,33 @@ def test_encoding_figure_written(tmp_path):
     assert path.exists() and path.stat().st_size > 0
 
 
+def test_encoding_figure_handles_unevaluable_row(tmp_path):
+    # PR review: an unevaluable rot13 row must not crash the plot or draw a 0.0 bar.
+    rows = {
+        "verbatim": ContrastRow("verbatim", text_f1=0.95, cift_f1=0.92, n=40),
+        "rot13": ContrastRow("rot13", text_f1=0.0, cift_f1=0.0, n=20, evaluable=False),
+    }
+    path = plot_encoding_robustness(rows, tmp_path / "encoding.png")
+    assert path.exists() and path.stat().st_size > 0
+
+
+def test_interpretation_marks_unevaluable_encoding():
+    # An unevaluable encoding is reported as such, never as a real 0.0 F1.
+    rows = {
+        "verbatim": ContrastRow("verbatim", 0.9, 0.9, 40),
+        "rot13": ContrastRow("rot13", 0.0, 0.0, 20, evaluable=False),
+    }
+    text = build_interpretation(
+        ControlResult(auroc=0.99, passed=True),
+        Metrics(auroc=0.83, f1=0.78, fpr=0.04, threshold=12.0),
+        rows,
+        0.0,
+        np.array([0.1, 0.2, 1.4, 0.3]),
+    )
+    assert "rot13: unevaluable" in text
+    assert "rot13: text 0.00" not in text
+
+
 def test_interpretation_refuses_null_when_control_failed():
     # Covers R14: a failed positive control blocks interpreting the main result.
     text = build_interpretation(

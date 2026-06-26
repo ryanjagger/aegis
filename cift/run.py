@@ -83,7 +83,13 @@ def build_interpretation(
         lines.append("")
         lines.append("Encoding contrast (detection F1):")
         for enc, row in contrast_rows.items():
-            lines.append(f"- {enc}: text {row.text_f1:.2f}, CIFT {row.cift_f1:.2f} (n={row.n})")
+            if not row.evaluable:
+                lines.append(
+                    f"- {enc}: unevaluable — no correctly-encoded attack survived, so an F1 over "
+                    "the remaining all-benign set would be degenerate, not a real 0.0"
+                )
+            else:
+                lines.append(f"- {enc}: text {row.text_f1:.2f}, CIFT {row.cift_f1:.2f} (n={row.n})")
         if encoding_success_rate is not None:
             lines.append("")
             lines.append(

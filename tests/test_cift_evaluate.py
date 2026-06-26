@@ -58,6 +58,21 @@ def test_contrast_text_collapses_while_cift_holds():
     assert rows["rot13"].cift_f1 >= rows["verbatim"].cift_f1 - 1e-9  # CIFT holds flat
 
 
+def test_contrast_marks_encoding_unevaluable_with_no_attacks():
+    # PR review: if every encoded attack is dropped (e.g. 0% rot13 success), the
+    # rot13 subset is all-benign and its F1 is degenerate — mark it unevaluable
+    # rather than reporting a misleading 0.0 detector failure.
+    records: list[ContrastRecord] = []
+    for _ in range(10):
+        records.append(ContrastRecord("verbatim", 1, text_hit=True, cift_hit=True))
+        records.append(ContrastRecord("verbatim", 0, text_hit=False, cift_hit=False))
+        records.append(ContrastRecord("rot13", 0, text_hit=False, cift_hit=False))  # benign only
+
+    rows = compute_contrast(records)
+    assert rows["verbatim"].evaluable is True
+    assert rows["rot13"].evaluable is False  # no attack positives survived
+
+
 def test_text_detected_uses_real_scanner():
     canary = generate_canary("github_pat", "lab")
     scanner = CanaryScanner([canary])

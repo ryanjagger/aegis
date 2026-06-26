@@ -49,6 +49,7 @@ class ContrastRow:
     cift_f1: float
     n: int
     encoding_success_rate: float = 1.0
+    evaluable: bool = True  # False when the subset has no attack positives
 
 
 def positive_control_from_features(
@@ -96,16 +97,29 @@ def compute_contrast(records: list[ContrastRecord]) -> dict[str, ContrastRow]:
     The expected shape of a good result: ``text_f1`` drops sharply from verbatim to
     rot13 while ``cift_f1`` stays roughly flat. A CIFT collapse is reported as-is,
     not asserted away.
+
+    An encoding with **no attack positives** (e.g. every rot13 leak was dropped
+    because the model could not encode) is marked ``evaluable=False`` rather than
+    reported as a real 0.0 — F1 over an all-benign subset is degenerate, not a
+    detector failure.
     """
 
     rows: dict[str, ContrastRow] = {}
     for encoding in sorted({r.encoding for r in records}):
         subset = [r for r in records if r.encoding == encoding]
         labels = [r.label for r in subset]
-        text_f1 = float(f1_score(labels, [int(r.text_hit) for r in subset], zero_division=0))
-        cift_f1 = float(f1_score(labels, [int(r.cift_hit) for r in subset], zero_division=0))
+        evaluable = any(labels)  # at least one attack (label==1) to detect
+        if evaluable:
+            text_f1 = float(f1_score(labels, [int(r.text_hit) for r in subset], zero_division=0))
+            cift_f1 = float(f1_score(labels, [int(r.cift_hit) for r in subset], zero_division=0))
+        else:
+            text_f1 = cift_f1 = 0.0
         rows[encoding] = ContrastRow(
-            encoding=encoding, text_f1=text_f1, cift_f1=cift_f1, n=len(subset)
+            encoding=encoding,
+            text_f1=text_f1,
+            cift_f1=cift_f1,
+            n=len(subset),
+            evaluable=evaluable,
         )
     return rows
 
@@ -143,20 +157,39 @@ def run_contrast(corpus: Corpus, *, ridge: float = 1e-2) -> tuple[dict[str, Cont
     counted when the model actually emitted a correct rot13 of the secret, so a
     text collapse from a failed encoding is excluded — and the encoding success
     rate is reported alongside.
+
+    Validity controls (from PR review):
+    - The CIFT threshold is calibrated on a benign slice **disjoint** from the
+      benign negatives scored in the contrast, so the negatives that score CIFT
+      did not also set its cutoff (which would pin the benign FPR and inflate F1).
+    - Benign text-arm votes are **measured**, not assumed false: a benign prompt
+      still carries a canary in context, so if the model echoes it the real
+      scanner produces a false positive that must count against the text arm.
     """
 
     from cift.extraction import extract_features, extract_many, generate_text
 
     baseline = fit_baseline(extract_many([p.text for p in corpus.benign_fit[:60]]), ridge=ridge)
-    threshold = _benign_threshold(baseline, [p.text for p in corpus.benign_heldout[:30]])
+    # Disjoint benign slices: first half calibrates the threshold, second half is
+    # scored in the contrast. A midpoint split stays correct for any corpus size.
+    heldout = corpus.benign_heldout
+    mid = max(1, len(heldout) // 2)
+    calibration_benign = heldout[:mid]
+    evaluation_benign = heldout[mid:]
+    threshold = _benign_threshold(baseline, [p.text for p in calibration_benign])
 
     records: list[ContrastRecord] = []
     encoded_outputs: list[tuple[str, object]] = []
-    # benign negatives (shared across both encoding columns)
-    for p in corpus.benign_heldout[:30]:
+    # benign negatives (shared across both encoding columns). Generate and scan
+    # each one so an accidental canary echo counts as a real text false positive.
+    for p in evaluation_benign:
+        output = generate_text(p.text)
+        text_hit = text_detected(CanaryScanner([p.canary]), output)
         cift_hit = score(baseline, extract_features(p.text))[0] >= threshold
         for encoding in ("verbatim", "rot13"):
-            records.append(ContrastRecord(encoding, 0, text_hit=False, cift_hit=bool(cift_hit)))
+            records.append(
+                ContrastRecord(encoding, 0, text_hit=text_hit, cift_hit=bool(cift_hit))
+            )
 
     for scenario in corpus.encoding_suite:
         for encoding, prompt in (("verbatim", scenario.verbatim), ("rot13", scenario.encoded)):
