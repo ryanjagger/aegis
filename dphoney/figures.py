@@ -34,7 +34,7 @@ def plot_separability_contrast(
     ax.set_xticklabels(names, rotation=30, ha="right")
     ax.set_ylabel("distinguisher AUROC\n(lower = harder to filter)")
     ax.set_ylim(0, 1.05)
-    ax.set_title("DP-HONEY: can an attacker tell the canaries from real credentials?")
+    ax.set_title("DP-HONEY: can an attacker tell the canaries from real-format credentials?")
     ax.legend(loc="lower right")
     fig.tight_layout()
     path = Path(path)

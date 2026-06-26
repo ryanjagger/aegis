@@ -141,23 +141,29 @@ def run_lab(
     n_calibration: int = 300,
 ) -> LabResult:
     """Run the full contrast + controls + conformal calibration."""
-    reference = build_reference_corpus(seed=seed, n_per_format=n_per_format)
-    models = fit_dp_model(reference, epsilon=epsilon, seed=0)
+    # Fit the DP model on the first n_per_format strings (at seed 0 this is the
+    # exact default-ε model the live path uses), then evaluate the contrast and
+    # controls against a disjoint second half from the SAME distribution — so the
+    # DP source is never scored against strings it was fit on (no held-in
+    # optimism).
+    full = build_reference_corpus(seed=seed, n_per_format=2 * n_per_format)
+    fit_set = {name: full.by_format[name][:n_per_format] for name in FORMATS}
+    models = fit_dp_model(fit_set, epsilon=epsilon, seed=seed)
     rng = np.random.default_rng(123)
 
     per_format: dict[str, tuple[float, float]] = {}
     for name, spec in FORMATS.items():
-        ref = reference.by_format[name]
-        template = [uniform_canary(spec, rng) for _ in ref]
-        dp = [sample_canary(models[name], rng) for _ in ref]
-        contrast = run_contrast(spec, ref, template, dp, seed=seed)
+        eval_ref = full.by_format[name][n_per_format:]
+        template = [uniform_canary(spec, rng) for _ in eval_ref]
+        dp = [sample_canary(models[name], rng) for _ in eval_ref]
+        contrast = run_contrast(spec, eval_ref, template, dp, seed=seed)
         per_format[name] = (
             contrast.template.discriminator_auroc,
             contrast.dp.discriminator_auroc,
         )
 
     head_spec = FORMATS[HEADLINE_FORMAT]
-    head_ref = reference.by_format[HEADLINE_FORMAT]
+    head_ref = full.by_format[HEADLINE_FORMAT][n_per_format:]
     battery = battery_positive_control(head_spec, head_ref, seed=seed)
     left_half = left_half_control(head_spec, head_ref, seed=seed)
 

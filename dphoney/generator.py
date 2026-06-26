@@ -153,6 +153,12 @@ def fit_dp_model(
 
     Seeding the noise draw makes the released model deterministic for a given
     (reference, ε, seed), so the live path and the lab share the exact model.
+
+    Demo caveat: a fixed, publicly-known seed makes the ε-DP guarantee
+    distributional only — an adversary who knows the seed can regenerate the
+    noise and recover the raw counts. That is harmless here (the "protected"
+    corpus is itself synthetic), but a real deployment over real credentials MUST
+    draw fresh, secret noise per release or the guarantee is vacuous.
     """
     by_format = reference.by_format if isinstance(reference, ReferenceCorpus) else reference
     models: dict[str, DPModel] = {}
