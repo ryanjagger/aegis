@@ -1,11 +1,23 @@
 from __future__ import annotations
 
-import json
 import os
-from typing import Any
+import sys
+from pathlib import Path
 
-import requests
-import streamlit as st
+# `streamlit run dashboard/streamlit_app.py` puts the script's directory
+# (dashboard/) on sys.path, not the repo root, and this project is not
+# pip-installed (the tests rely on pytest's pythonpath="."). The AIS Walkthrough
+# page imports the repo-root `dphoney` package (and, via it, `app`), so put the
+# repo root on the path ourselves before that import runs.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+import json  # noqa: E402
+from typing import Any  # noqa: E402
+
+import requests  # noqa: E402
+import streamlit as st  # noqa: E402
 
 API_BASE = os.getenv("AIS_API_BASE", "http://localhost:8000").rstrip("/")
 
