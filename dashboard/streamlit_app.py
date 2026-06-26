@@ -109,6 +109,10 @@ def attack_playground() -> None:
         output_scanning = col2.checkbox("Output scan", value=True)
         tool_scanning = col3.checkbox("Tool scan", value=True)
         nimbus_lite = col4.checkbox("NIMBUS", value=False)
+        canary_source = st.selectbox(
+            "Canary source", ["template", "dp"],
+            help="template = deterministic format; dp = DP-HONEY model (harder to filter).",
+        )
         submitted = st.form_submit_button("Run")
 
     if not submitted:
@@ -122,6 +126,7 @@ def attack_playground() -> None:
         "model_adapter": model_adapter,
         "defenses": {
             "canary_injection": canary_injection,
+            "canary_source": canary_source,
             "output_scanning": output_scanning,
             "tool_scanning": tool_scanning,
             "nimbus_lite": nimbus_lite,
@@ -177,6 +182,84 @@ def leakage_ledger() -> None:
         st.caption("Enable NIMBUS in the Attack Playground to populate this ledger.")
 
 
+def ais_walkthrough() -> None:
+    from dphoney import live_logic
+    from dphoney.artifacts import SEPARABILITY_PNG, artifacts_dir
+
+    st.header("AIS Walkthrough")
+    st.caption("The full pipeline in one pass: DP-HONEY → CIFT → text backstop → NIMBUS.")
+
+    # One run action drives every downstream station; the result is held in
+    # session state so it survives reruns (slider moves, etc.).
+    col_run, col_scenario = st.columns([1, 2])
+    scenario = col_scenario.selectbox(
+        "Scenario",
+        ["benign", "direct_leak", "base64_leak", "tool_call_leak", "multi_turn_drip"],
+    )
+    if col_run.button("Inject DP canary + run", type="primary"):
+        payload = {
+            "route": "/chat",
+            "session_id": "walkthrough",
+            "user_input": "Summarize this support ticket and create an internal note.",
+            "scenario": scenario,
+            "model_adapter": "mock",
+            "defenses": {
+                "canary_injection": True,
+                "canary_source": "dp",
+                "output_scanning": True,
+                "tool_scanning": True,
+                "nimbus_lite": True,
+            },
+        }
+        try:
+            with st.spinner("Running the live pipeline…"):
+                st.session_state["walkthrough_result"] = api_post("/playground/run", payload)
+        except requests.RequestException as exc:
+            st.error(f"Pipeline request failed: {exc}")
+    result = st.session_state.get("walkthrough_result")
+
+    # 1 · DP-HONEY ----------------------------------------------------------------
+    st.markdown("### 1 · DP-HONEY — calibrated honeytokens")
+    figure = artifacts_dir() / SEPARABILITY_PNG
+    if figure.exists():
+        st.image(str(figure), caption=live_logic.separability_caption(True))
+    else:
+        st.info(live_logic.separability_caption(False))
+    with st.expander("Canary-accounting calculator — Pr(detect) = k/(m+k)·(1−β)"):
+        k = st.slider("planted canaries k", 0, 50, 5)
+        m = st.slider("real credentials m", 0, 50, 5)
+        beta = st.slider("detector miss rate β", 0.0, 1.0, 0.1)
+        st.metric("Pr(detect)", f"{live_logic.accounting(k, m, beta):.3f}")
+
+    # 2 · CIFT --------------------------------------------------------------------
+    st.markdown("### 2 · CIFT — pre-output activation gate")
+    st.caption("Opt-in white-box station; launch it separately (loads the model):")
+    st.code(live_logic.cift_launch_command())
+
+    # 3 · Text backstop -----------------------------------------------------------
+    st.markdown("### 3 · Text backstop — canary scanner")
+    if result:
+        st.json(result)
+    else:
+        st.info(live_logic.prerun_message("text backstop"))
+
+    # 4 · NIMBUS ------------------------------------------------------------------
+    st.markdown("### 4 · NIMBUS — cumulative leakage")
+    st.warning(live_logic.nimbus_label())
+    if result:
+        try:
+            rows = api_get("/leakage-ledger")
+        except requests.RequestException as exc:
+            st.error(f"Ledger request failed: {exc}")
+            rows = []
+        if rows:
+            st.line_chart(rows, x="created_at", y="score_total")
+        else:
+            st.caption("Ledger empty for this run.")
+    else:
+        st.info(live_logic.prerun_message("NIMBUS"))
+
+
 def main() -> None:
     st.set_page_config(page_title="AIS", layout="wide")
     st.title("AIS")
@@ -186,6 +269,7 @@ def main() -> None:
     page = st.sidebar.radio(
         "Page",
         [
+            "AIS Walkthrough",
             "Live Requests",
             "Response Trace",
             "Canary Registry",
@@ -195,6 +279,7 @@ def main() -> None:
         ],
     )
     pages = {
+        "AIS Walkthrough": ais_walkthrough,
         "Live Requests": live_requests,
         "Response Trace": response_trace,
         "Canary Registry": canary_registry,

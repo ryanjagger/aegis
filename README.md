@@ -208,12 +208,73 @@ non-goals of this lab — see `docs/plans/2026-06-25-001-feat-cift-activation-pr
 The live monitor visualizes CIFT on individual prompts but does not gate the
 proxy; wiring the probe into `/v1/responses` remains the deferred U9 stretch.
 
+## DP-HONEY Calibrated Honeytoken Lab
+
+The `dphoney/` package is the paper's second pillar. Instead of template-format
+canaries (which an attacker can filter by prefix, checksum, entropy, or length),
+it generates honeytokens from a **differentially-private character-bigram model**
+and *measures* whether they are distinguishable from real-format credentials. It
+is model-free — pure numpy/scikit-learn, no torch — so it installs far lighter
+than the CIFT lab.
+
+Everything stays local and synthetic: the "real credential" reference class is a
+set of format-valid synthetic strings with non-uniform structure; no real secrets
+are used.
+
+What it does:
+
+- Fits a per-format bigram model on the reference class and adds Laplace noise to
+  the released counts for an ε-DP guarantee (sensitivity = the per-credential
+  bigram-transition count, so the reported ε is honest, not understated).
+- Trains a distinguisher battery (entropy, bigram log-likelihood, format checks,
+  a scikit-learn MLP) and produces the headline contrast: **template** canaries
+  separate from real credentials (AUROC ≈ 1.0), **DP** canaries sit at chance
+  (≈ 0.5).
+- Gates the result on two controls (a battery positive control, and a left-half
+  control that fails loudly if the reference lacks structure), and calibrates the
+  detector threshold with split-conformal prediction (coverage hits the target
+  with no hand-tuning).
+
+Install the lab dependencies (scikit-learn, matplotlib — no torch):
+
+```bash
+uv sync --group dphoney
+```
+
+Run the lab end to end (writes `separability.png`, `coverage.png`,
+`bigram_model.npz`, `calibration.json`, and `interpretation.md` under
+`dphoney/artifacts/`):
+
+```bash
+uv run --group dphoney python -m dphoney.run
+```
+
+### Live demo
+
+DP canaries plug into the live injection path behind a toggle. The **AIS
+Walkthrough** dashboard page walks the full pipeline (DP-HONEY → CIFT → text
+backstop → NIMBUS) in one scroll, injecting a DP canary through the real proxy;
+the Attack Playground also exposes a `template` vs `dp` canary-source selector so
+you can show the same distinguisher filter a template canary and fail on the DP
+one:
+
+```bash
+uv run streamlit run dashboard/streamlit_app.py
+```
+
+The DP generation path is numpy-only, so the FastAPI backend injects DP canaries
+without the opt-in group. NIMBUS remains the heuristic NIMBUS-lite (not the
+paper's InfoNCE estimator) and is labeled as such in the walkthrough.
+
 ## Tests
 
 ```bash
 uv run pytest
 ```
 
-The default suite stays light: the `cift` lab tests skip automatically when the
-`cift` group is not installed. Install it (`uv sync --group cift`) to run the
-corpus, detector, contrast, and figure tests.
+The default suite stays light: the `cift` and `dphoney` lab tests skip
+automatically when their group is not installed. Install `cift`
+(`uv sync --group cift`) for the activation-probe tests, or `dphoney`
+(`uv sync --group dphoney`) for the distinguisher and figure tests; the
+DP-HONEY corpus, generator, calibration, injection, and walkthrough-helper tests
+run on the base install.
