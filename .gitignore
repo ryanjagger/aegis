@@ -8,3 +8,6 @@ ais.db
 *.db
 *.sqlite
 *.sqlite3
+# CIFT lab outputs and model cache
+cift/artifacts/
+.cache/huggingface/

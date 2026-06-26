@@ -136,8 +136,84 @@ action. The `multi_turn_drip` scenario demonstrates why this matters: no single
 turn contains a full canary, but repeated fragments eventually cross the
 cumulative budget.
 
+## CIFT Activation-Probe Lab
+
+The `cift/` package is an offline research lab that reproduces the paper's CIFT
+method (activation-based, pre-output credential-access detection) on a small
+local model. It is independent of the FastAPI app and uses an opt-in dependency
+group, so the default install and test suite stay light.
+
+Everything stays local: a small instruct model (default `Qwen2.5-1.5B-Instruct`)
+runs on-device, all secrets are fake canaries, and nothing leaves the machine.
+
+What it does:
+
+- Captures last-K-layer hidden states at the readout position (the final prompt
+  token after the chat template), never at static credential-token positions.
+- Fits an unsupervised diagonal-Mahalanobis detector from a benign baseline.
+- Validates the pipeline with a positive control before interpreting any null
+  result, then contrasts CIFT against the existing text scanner under a rot13
+  encoding requested in-prompt (which `app/scanners/transforms.py` does not
+  decode), producing two figures and a written interpretation.
+
+Install the lab dependencies (torch, transformers, scikit-learn, matplotlib):
+
+```bash
+uv sync --group cift
+```
+
+Run the lab end to end (downloads the model on first run, writes figures,
+`interpretation.md`, and the operating-point `threshold.json` under
+`cift/artifacts/`):
+
+```bash
+uv run python -m cift.run
+```
+
+### Live monitor
+
+For an interactive demo of the paper's core claim — that the activations betray
+credential-seeking *before* a token is generated — launch the Streamlit live
+monitor. It races CIFT's **pre-output** verdict (read from the prompt's readout
+activations, zero tokens generated) against the text scanner's **post-output**
+verdict on the model's actual reply, and shows the token index where the leak
+first becomes visible to the scanner:
+
+```bash
+uv run --group cift streamlit run cift/live_monitor.py
+```
+
+It reuses the `baseline.npz` and `threshold.json` written by `cift.run`; if the
+operating point is missing it calibrates one from benign held-out prompts on
+first launch. Pick a built-in scenario (matched-surface benign, the measured
+steered leak, the exfil-vocabulary confound, or a blatant out-of-distribution
+control) or type your own prompt.
+
+`.streamlit/config.toml` disables Streamlit's file watcher on purpose: the
+watcher walks every imported module, which makes transformers eagerly import
+model submodules that need `torchvision` (not installed, and not used here),
+producing a spurious `ModuleNotFoundError` on startup. The only cost is no
+auto-rerun on source edits — refresh the browser instead.
+
+Set `AIS_CIFT_MODEL=Qwen/Qwen2.5-0.5B-Instruct` for a faster, smaller run, or
+`AIS_CIFT_DEVICE=cpu` to force CPU. The model-in-the-loop extraction tests are
+opt-in:
+
+```bash
+CIFT_MODEL_TESTS=1 uv run --group cift pytest tests/test_cift_extraction.py
+```
+
+NIMBUS-lite and the CIFT learned probe / live `/v1/responses` gate are deliberate
+non-goals of this lab — see `docs/plans/2026-06-25-001-feat-cift-activation-probe-lab-plan.md`.
+The live monitor visualizes CIFT on individual prompts but does not gate the
+proxy; wiring the probe into `/v1/responses` remains the deferred U9 stretch.
+
 ## Tests
 
 ```bash
 uv run pytest
 ```
+
+The default suite stays light: the `cift` lab tests skip automatically when the
+`cift` group is not installed. Install it (`uv sync --group cift`) to run the
+corpus, detector, contrast, and figure tests.
