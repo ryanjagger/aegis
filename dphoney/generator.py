@@ -28,7 +28,15 @@ import numpy as np
 
 from dphoney.corpus import FORMATS, FormatSpec, ReferenceCorpus, build_reference_corpus
 
-DEFAULT_EPSILON = 1.0
+# Demo default, tuned so the contrast is legible on the small synthetic corpus:
+# the per-credential ℓ1 sensitivity (~15-61) over a few-hundred-string corpus
+# forces a privacy/utility frontier. At ε≈50 the noised model still reproduces
+# the reference bigram structure (DP canaries indistinguishable, AUROC ≈ 0.5)
+# while smaller ε collapses it toward uniform (DP becomes as filterable as
+# template). This is a weak DP guarantee by design — the demo shows the
+# mechanism; a larger corpus shifts the frontier toward smaller ε. The lab
+# reports the effective ε honestly.
+DEFAULT_EPSILON = 50.0
 
 
 def extract_bodies(spec: FormatSpec, value: str) -> list[str]:
@@ -98,8 +106,14 @@ def _sample_body(spec: FormatSpec, trans_probs: np.ndarray, length: int, rng) ->
     return "".join(out)
 
 
-def fallback_canary(spec: FormatSpec, rng) -> str:
-    """Uniform-random body, guaranteed format-valid. Defensive fallback only."""
+def uniform_canary(spec: FormatSpec, rng) -> str:
+    """Uniform-random body, guaranteed format-valid.
+
+    This is the distribution the repo's template generator
+    (``app/canaries/generator.py``, ``secrets.choice``) draws from, so it doubles
+    as the "template" baseline for the U3 contrast and as the defensive fallback
+    when a modelled sample somehow fails validation.
+    """
     parts: list[str] = []
     for part in spec.parts:
         if isinstance(part, str):
@@ -127,7 +141,7 @@ def sample_canary(model: DPModel, rng, max_retries: int = 4) -> str:
         value = "".join(parts)
         if spec.validate(value):
             return value
-    return fallback_canary(spec, rng)
+    return uniform_canary(spec, rng)
 
 
 def fit_dp_model(
